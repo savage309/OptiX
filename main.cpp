@@ -66,24 +66,29 @@ std::string getProgramSource(const std::string& path) {
     return std::string((std::istreambuf_iterator <char>(programSource)), std::istreambuf_iterator <char>());
 }
 
-inline void checkOptError(const char* file, int line, ResultType result, Context* ctx = NULL) {
-    if (result != RT_SUCCESS) {
-        if (ctx) {
-            const char* returnString;
-            rtContextGetErrorString(*ctx, RTresult(result), &returnString);
-            printf("Erorr 0x%x %s (file %s, line %i)",int(result),returnString, file, line);
-            
-        } else
-            printf("Erorr 0x%x (file %s, line %i)", int(result), file, line);
-        vassert(false);
-    }
+
+inline void checkOptErrorContext(const char* file, int line, ResultType result, Context ctx) {
+    if (result == 0)
+        return;
+    const char* returnString;
+    rtContextGetErrorString(ctx, RTresult(result), &returnString);
+    printf("Erorr 0x%x %s (file %s, line %i)",int(result),returnString, file, line);
+    vassert(false);
+    
+}
+
+inline void checkOptError(const char* file, int line, ResultType result) {
+    if (result == 0)
+        return;
+    printf("Erorr 0x%x (file %s, line %i)", int(result), file, line);
+    vassert(false);
 }
 
 #define CHECK_ERROR(X) checkOptError(__FILE__, __LINE__, X)
-#define CHECK_ERROR_CTX(X, CTX) checkOptError(__FILE__, __LINE__, X, CTX)
+#define CHECK_ERROR_CTX(X) checkOptErrorContext(__FILE__, __LINE__, X, context)
 
 
-void buildPTX() {
+std::string buildPTX() {
     const char* pathToKernelSource = "/Developer/git/OptiX/OptiX/kernel.cu";
     printLog(LogTypeInfo, "Trying to load kernel from source located at %s\n", pathToKernelSource);
     std::string source = getProgramSource(pathToKernelSource);
@@ -104,7 +109,7 @@ void buildPTX() {
         nvRes = nvrtcGetProgramLog(program, log.get());
         CHECK_ERROR(nvRes);
         printLog(LogTypeError, "%s", log.get());
-        return;
+        return "";
     }
     
     size_t ptxSize;
@@ -114,96 +119,54 @@ void buildPTX() {
     std::unique_ptr<char[]> ptx(new char[ptxSize + 1]);
     nvRes = nvrtcGetPTX(program, ptx.get());
     
-    const char* TARGET_CUDA_SAVE_PTX_PATH = "/Developer/git/OptiX/OptiX/blago.ptx";
-    
-    {
-        std::fstream ptxStream(TARGET_CUDA_SAVE_PTX_PATH, std::ios_base::trunc | std::ios_base::out);
-        if (!ptxStream.good()) {
-            printLog(LogTypeWarning, "Could not save PTX IR to %s\n", TARGET_CUDA_SAVE_PTX_PATH);
-        } else {
-            printLog(LogTypeInfo, "PTX IR saved to %s\n", TARGET_CUDA_SAVE_PTX_PATH);
-        }
-        ptxStream << ptx.get();
-    }
-    
-    const size_t JIT_NUM_OPTIONS = 9;
-    const size_t JIT_BUFFER_SIZE_IN_BYTES = 1024;
-    char logBuffer[JIT_BUFFER_SIZE_IN_BYTES];
-    char errorBuffer[JIT_BUFFER_SIZE_IN_BYTES];
-    
-    CUjit_option jitOptions[JIT_NUM_OPTIONS];
-    int optionsCounter = 0;
-    jitOptions[optionsCounter++] = CU_JIT_MAX_REGISTERS;
-    jitOptions[optionsCounter++] = CU_JIT_OPTIMIZATION_LEVEL;
-    jitOptions[optionsCounter++] = CU_JIT_TARGET_FROM_CUCONTEXT;
-    jitOptions[optionsCounter++] = CU_JIT_FALLBACK_STRATEGY;
-    jitOptions[optionsCounter++] = CU_JIT_INFO_LOG_BUFFER;
-    jitOptions[optionsCounter++] = CU_JIT_INFO_LOG_BUFFER_SIZE_BYTES;
-    jitOptions[optionsCounter++] = CU_JIT_ERROR_LOG_BUFFER;
-    jitOptions[optionsCounter++] = CU_JIT_ERROR_LOG_BUFFER_SIZE_BYTES;
-    jitOptions[optionsCounter++] = CU_JIT_GENERATE_LINE_INFO;
-    void* jitValues[JIT_NUM_OPTIONS];
-    const int maxRegCount = 63;
-    int valuesCounter = 0;
-    jitValues[valuesCounter++] = (void*)maxRegCount;
-    const int optimizationLevel = 4;
-    jitValues[valuesCounter++] = (void*)optimizationLevel;
-    const int dummy = 0;
-    jitValues[valuesCounter++] = (void*)dummy;
-    const CUjit_fallback_enum fallbackStrategy = CU_PREFER_PTX;
-    jitValues[valuesCounter++] = (void*)fallbackStrategy;
-    jitValues[valuesCounter++] = (void*)logBuffer;
-    const int logBufferSize = JIT_BUFFER_SIZE_IN_BYTES;
-    jitValues[valuesCounter++] = (void*)logBufferSize;
-    jitValues[valuesCounter++] = (void*)errorBuffer;
-    const int errorBufferSize = JIT_BUFFER_SIZE_IN_BYTES;
-    jitValues[valuesCounter++] = (void*)errorBufferSize;
-    const int generateLineInfo = 1;
-    jitValues[valuesCounter++] = (void*)generateLineInfo;
-    
-    
-    printLog(LogTypeInfo, "PTX %s", ptx.get());
-    //for (int i = 0; i < devices.size(); ++i) {
-    //    CUmodule program;
-    //    CUresult err = cuModuleLoadDataEx(&program, ptx.get(), JIT_NUM_OPTIONS, jitOptions, jitValues);
-    //    CHECK_ERROR(err);
-    //    programs.push_back(program);
-    //    printLog(LogTypeInfo, "program for device %i compiled\n", i);
-    //}
-    nvRes = nvrtcDestroyProgram(&program);
-    CHECK_ERROR(nvRes);
+    return ptx.get();
 }
 
 struct GPUProgram {
     void create() {
-        CHECK_ERROR(rtContextCreate(&context));
+        CHECK_ERROR_CTX(rtContextCreate(&context));
     }
     
     void destroy() {
-        CHECK_ERROR(rtContextDestroy(context));
+        CHECK_ERROR_CTX(rtContextDestroy(context));
     }
     
     void setRayTypeCount(int rayTypeCount) {
         vassert(rayTypeCount > 0);
-        CHECK_ERROR(rtContextSetRayTypeCount(context, rayTypeCount));
+        CHECK_ERROR_CTX(rtContextSetRayTypeCount(context, rayTypeCount));
     }
     
     void setEntryPointCount(int entryPointCount) {
         vassert(entryPointCount > 0);
-        CHECK_ERROR(rtContextSetEntryPointCount(context, entryPointCount));
+        CHECK_ERROR_CTX(rtContextSetEntryPointCount(context, entryPointCount));
     }
     
     void setStackSize(int stackSize) {
         vassert(stackSize > 0);
-        CHECK_ERROR(rtContextSetStackSize(context, stackSize));
+        CHECK_ERROR_CTX(rtContextSetStackSize(context, stackSize));
     }
     
     void declareVariable(const char* name, Variable* var) {
         vassert(name && var);
-        CHECK_ERROR(rtContextDeclareVariable(context, name, var));
+        CHECK_ERROR_CTX(rtContextDeclareVariable(context, name, var));
+    }
+    
+    void setRayGenerationProgram(const char* ptx, const char* programName) {
+        CHECK_ERROR_CTX(rtContextSetEntryPointCount(context, 1));
+        CHECK_ERROR_CTX(rtContextSetRayGenerationProgram(context, 0, getRTProgram(ptx, programName)));
+    }
+    
+    void setExceptionProgram(const char* ptx, const char* programName) {
+        CHECK_ERROR_CTX(rtContextSetExceptionProgram(context, 0, getRTProgram(ptx, programName)));
     }
     
 private:
+    RTprogram getRTProgram(const char* ptx, const char* programName) {
+        RTprogram program;
+        CHECK_ERROR_CTX(rtProgramCreateFromPTXString(context, ptx, programName, &program));
+        return program;
+    }
+    
     Context context;
 };
 
@@ -222,7 +185,7 @@ struct clRenderData {
 int main(int argc, const char* argv[]) {
     GPUProgram program;
     
-    buildPTX();
+    const std::string& ptxSource = buildPTX();
     
     ResultType err = ResultSuccess;
     err = cuInit(0);
@@ -240,6 +203,9 @@ int main(int argc, const char* argv[]) {
     
     program.declareVariable("renderData", &renderData);
     setVariable(renderData, sizeof(clRenderData), &hostRenderData);
+    
+    program.setRayGenerationProgram(ptxSource.c_str(), "generatePrimaryRay");
+    program.setExceptionProgram(ptxSource.c_str(), "exception");
     
     program.destroy();
     
