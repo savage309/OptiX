@@ -18,8 +18,9 @@ inline void vassert(bool b) {
 #endif //VASSERT_ENABLED
 }
 typedef int ResultType;
-typedef RTcontext Context;
-typedef RTvariable Variable;
+typedef RTvariable GPUVariable;
+typedef RTmaterial GPUMaterial;
+typedef RTcontext GPUContext;
 
 #define COUNT_OF(x) ((sizeof(x)/sizeof(0[x])) / ((size_t)(!(sizeof(x) % sizeof(0[x])))))
 
@@ -67,7 +68,7 @@ std::string getProgramSource(const std::string& path) {
 }
 
 
-inline void checkOptErrorContext(const char* file, int line, ResultType result, Context ctx) {
+inline void checkOptErrorContext(const char* file, int line, ResultType result, GPUContext ctx) {
     if (result == 0)
         return;
     const char* returnString;
@@ -122,13 +123,19 @@ std::string buildPTX() {
     return ptx.get();
 }
 
-struct GPUProgram {
-    void create() {
+struct Context {
+    Context():context(NULL) {}
+    ~Context() {
+        vassert(context == NULL);
+    }
+    
+    void init() {
         CHECK_ERROR_CTX(rtContextCreate(&context));
     }
     
-    void destroy() {
+    void freeMem() {
         CHECK_ERROR_CTX(rtContextDestroy(context));
+        context = NULL;
     }
     
     void setRayTypeCount(int rayTypeCount) {
@@ -146,7 +153,7 @@ struct GPUProgram {
         CHECK_ERROR_CTX(rtContextSetStackSize(context, stackSize));
     }
     
-    void declareVariable(const char* name, Variable* var) {
+    void declareVariable(const char* name, GPUVariable* var) {
         vassert(name && var);
         CHECK_ERROR_CTX(rtContextDeclareVariable(context, name, var));
     }
@@ -160,17 +167,54 @@ struct GPUProgram {
         CHECK_ERROR_CTX(rtContextSetExceptionProgram(context, 0, getRTProgram(ptx, programName)));
     }
     
-private:
+    GPUContext get() {
+        return context;
+    }
+    
     RTprogram getRTProgram(const char* ptx, const char* programName) {
         RTprogram program;
         CHECK_ERROR_CTX(rtProgramCreateFromPTXString(context, ptx, programName, &program));
         return program;
     }
     
-    Context context;
+private:
+    GPUContext context;
 };
 
-void setVariable(Variable v, unsigned size, const void* hostPtr) {
+struct Material {
+    Material(Context& context):context(context) {
+        CHECK_ERROR(rtMaterialCreate(context.get(), &material));
+    }
+    ~Material() {
+        vassert(material==NULL);
+    }
+    
+    void freeMem() {
+        vassert(material);
+        CHECK_ERROR(rtMaterialDestroy(material));
+        material = NULL;
+    }
+    
+    void setClosestHitProgram(const char* ptx, unsigned rayType, const char* programName) {
+        RTprogram closestHitProgram = context.getRTProgram(ptx, programName);
+        CHECK_ERROR(rtMaterialSetClosestHitProgram(material, rayType, closestHitProgram));
+    }
+    
+    void setAnyHitProgram(const char* ptx, unsigned rayType, const char* programName) {
+        RTprogram anyHitProgram = context.getRTProgram(ptx, programName);
+        CHECK_ERROR(rtMaterialSetAnyHitProgram(material, rayType, anyHitProgram));
+    }
+    
+    GPUMaterial get() {
+        return material;
+    }
+    
+private:
+    Context& context;
+    GPUMaterial material;
+};
+
+void setVariable(GPUVariable v, unsigned size, const void* hostPtr) {
     CHECK_ERROR(rtVariableSetUserData(v, size, hostPtr));
 }
 
@@ -183,7 +227,7 @@ struct clRenderData {
 };
 
 int main(int argc, const char* argv[]) {
-    GPUProgram program;
+    Context context;
     
     const std::string& ptxSource = buildPTX();
     
@@ -194,20 +238,26 @@ int main(int argc, const char* argv[]) {
     
     clRenderData hostRenderData;
     
-    Variable renderData;
+    GPUVariable renderData;
     
-    program.create();
+    context.init();
     
-    program.setRayTypeCount(1);
-    program.setStackSize(14000);
+    context.setRayTypeCount(1);
+    context.setStackSize(14000);
+    context.setRayTypeCount(1);
     
-    program.declareVariable("renderData", &renderData);
+    context.declareVariable("renderData", &renderData);
     setVariable(renderData, sizeof(clRenderData), &hostRenderData);
     
-    program.setRayGenerationProgram(ptxSource.c_str(), "generatePrimaryRay");
-    program.setExceptionProgram(ptxSource.c_str(), "exception");
+    context.setRayGenerationProgram(ptxSource.c_str(), "generatePrimaryRay");
+    context.setExceptionProgram(ptxSource.c_str(), "exception");
     
-    program.destroy();
+    Material material(context);
+    material.setClosestHitProgram(ptxSource.c_str(), 0, "materialHit");
+    material.setAnyHitProgram(ptxSource.c_str(), 0, "materialMiss");
+    
+    material.freeMem();
+    context.freeMem();
     
     return 0;
 }

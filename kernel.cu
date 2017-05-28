@@ -3,20 +3,22 @@
 #define shared __shared__
 #define syncThreads __syncthreads
 
-#if __cplusplus > 199711L
-#define HAS_CPP_11
-#endif
-
-#define BLOCK_SIZE 32
-
-extern "C"
-__global__
+kernel
 void generatePrimaryRay() {
     
 }
 
-extern "C"
-__global__
+kernel
 void exception() {
+    
+}
+
+kernel
+void materialHit() {
+    
+}
+
+kernel
+void materialMiss() {
     
 }
