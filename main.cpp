@@ -17,6 +17,7 @@ inline void vassert(bool b) {
     }
 #endif //VASSERT_ENABLED
 }
+
 typedef int ResultType;
 typedef RTvariable GPUVariable;
 typedef RTmaterial GPUMaterial;
@@ -24,7 +25,7 @@ typedef RTcontext GPUContext;
 
 #define COUNT_OF(x) ((sizeof(x)/sizeof(0[x])) / ((size_t)(!(sizeof(x) % sizeof(0[x])))))
 
-enum LogType { LogTypeInfo = 0, LogTypeInfoRaw = 0, LogTypeWarning, LogTypeError, LogTypeNone };
+enum LogType { LogTypeInfo = 0, LogTypeWarning, LogTypeError, LogTypeNone };
 
 const LogType LOG_LEVEL = LogTypeInfo;
 
@@ -32,32 +33,28 @@ void printLog(LogType priority, const char *format, ...) {
     
     if(priority < LOG_LEVEL)
         return;
-    if (priority != LogTypeInfoRaw) {
-        char s[512];
-        time_t t = time(NULL);
-        struct tm * p = localtime(&t);
-        strftime(s, 512, "[%H:%M:%S] ", p);
-        printf("%s", s);
-        switch (priority) {
-            case LogTypeInfo:
-                printf("Info: ");
-                break;
-            case LogTypeWarning:
-                printf("Warning: ");
-                break;
-            case LogTypeError:
-                printf("Error: ");
-                break;
-            default:
-                break;
-        }
+    char s[512];
+    time_t t = time(NULL);
+    struct tm * p = localtime(&t);
+    strftime(s, 512, "[%H:%M:%S] ", p);
+    printf("%s", s);
+    switch (priority) {
+        case LogTypeInfo:
+            printf("Info: ");
+            break;
+        case LogTypeWarning:
+            printf("Warning: ");
+            break;
+        case LogTypeError:
+            printf("Error: ");
+            break;
+        default:
+            break;
     }
     
     va_list args;
     va_start(args, format);
-    
     vprintf(format, args);
-    
     va_end(args);
 }
 
@@ -67,7 +64,6 @@ std::string getProgramSource(const std::string& path) {
     return std::string((std::istreambuf_iterator <char>(programSource)), std::istreambuf_iterator <char>());
 }
 
-
 inline void checkOptErrorContext(const char* file, int line, ResultType result, GPUContext ctx) {
     if (result == 0)
         return;
@@ -75,7 +71,6 @@ inline void checkOptErrorContext(const char* file, int line, ResultType result, 
     rtContextGetErrorString(ctx, RTresult(result), &returnString);
     printf("Erorr 0x%x %s (file %s, line %i)",int(result),returnString, file, line);
     vassert(false);
-    
 }
 
 inline void checkOptError(const char* file, int line, ResultType result) {
@@ -87,7 +82,6 @@ inline void checkOptError(const char* file, int line, ResultType result) {
 
 #define CHECK_ERROR(X) checkOptError(__FILE__, __LINE__, X)
 #define CHECK_ERROR_CTX(X) checkOptErrorContext(__FILE__, __LINE__, X, context)
-
 
 std::string buildPTX() {
     const char* pathToKernelSource = "/Developer/git/OptiX/OptiX/kernel.cu";
@@ -123,6 +117,19 @@ std::string buildPTX() {
     return ptx.get();
 }
 
+//wrapper ot (OptiX)Variable
+struct Variable {
+    void set(unsigned size, const void* hostPtr) {
+        CHECK_ERROR(rtVariableSetUserData(variable, size, hostPtr));
+    }
+    GPUVariable* get() {
+        return &variable;
+    }
+private:
+    GPUVariable variable;
+};
+
+//wrapper of (OptiX)Context
 struct Context {
     Context():context(NULL) {}
     ~Context() {
@@ -130,6 +137,7 @@ struct Context {
     }
     
     void init() {
+        vassert(context == NULL);
         CHECK_ERROR_CTX(rtContextCreate(&context));
     }
     
@@ -153,9 +161,9 @@ struct Context {
         CHECK_ERROR_CTX(rtContextSetStackSize(context, stackSize));
     }
     
-    void declareVariable(const char* name, GPUVariable* var) {
-        vassert(name && var);
-        CHECK_ERROR_CTX(rtContextDeclareVariable(context, name, var));
+    void declareVariable(const char* name, Variable& var) {
+        vassert(name && var.get());
+        CHECK_ERROR_CTX(rtContextDeclareVariable(context, name, var.get()));
     }
     
     void setRayGenerationProgram(const char* ptx, const char* programName) {
@@ -181,6 +189,7 @@ private:
     GPUContext context;
 };
 
+//wrapper of (OptiX)Material
 struct Material {
     Material(Context& context):context(context) {
         CHECK_ERROR(rtMaterialCreate(context.get(), &material));
@@ -214,10 +223,6 @@ private:
     GPUMaterial material;
 };
 
-void setVariable(GPUVariable v, unsigned size, const void* hostPtr) {
-    CHECK_ERROR(rtVariableSetUserData(v, size, hostPtr));
-}
-
 enum {
     ResultSuccess = 0,
 };
@@ -227,27 +232,21 @@ struct clRenderData {
 };
 
 int main(int argc, const char* argv[]) {
-    Context context;
-    
     const std::string& ptxSource = buildPTX();
     
-    ResultType err = ResultSuccess;
-    err = cuInit(0);
+    CHECK_ERROR(cuInit(0));
     
-    CHECK_ERROR(err);
-    
-    clRenderData hostRenderData;
-    
-    GPUVariable renderData;
-    
+    Context context;
     context.init();
     
     context.setRayTypeCount(1);
     context.setStackSize(14000);
     context.setRayTypeCount(1);
     
-    context.declareVariable("renderData", &renderData);
-    setVariable(renderData, sizeof(clRenderData), &hostRenderData);
+    Variable renderData;
+    clRenderData hostRenderData;
+    context.declareVariable("renderData", renderData);
+    renderData.set(sizeof(clRenderData), &hostRenderData);
     
     context.setRayGenerationProgram(ptxSource.c_str(), "generatePrimaryRay");
     context.setExceptionProgram(ptxSource.c_str(), "exception");
