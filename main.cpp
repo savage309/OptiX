@@ -241,7 +241,6 @@ int main(int argc, const char* argv[]) {
     
     context.setRayTypeCount(1);
     context.setStackSize(14000);
-    context.setRayTypeCount(1);
     
     Variable renderData;
     clRenderData hostRenderData;
